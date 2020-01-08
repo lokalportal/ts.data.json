@@ -119,7 +119,7 @@ export namespace JsonDecoder {
     }
   });
 
-  export type DecoderObject<a> = { [p in keyof a]: Decoder<a[p]> };
+  export type DecoderObject<a> = { [p in keyof Required<a>]: Decoder<a[p]> };
   export type DecoderObjectKeyMap<a> = { [p in keyof a]?: string };
 
   /**
@@ -175,6 +175,46 @@ export namespace JsonDecoder {
   }
 
   /**
+   * Decoder for objects that performs strict key checks.
+   * The decoder will fail if there are any extra keys in the provided object.
+   *
+   * @param decoders Key/value pairs of decoders for each object field.
+   * @param decoderName How to display the name of the object being decoded in errors.
+   */
+  export function objectStrict<a>(
+    decoders: DecoderObject<a>,
+    decoderName: string
+  ): Decoder<a> {
+    return new Decoder<a>((json: any) => {
+      if (json !== null && typeof json === 'object') {
+        for (const key in json) {
+          if (!decoders.hasOwnProperty(key)) {
+            return err<a>(
+              $JsonDecoderErrors.objectStrictUnknownKeyError(decoderName, key)
+            );
+          }
+        }
+        const result: any = {};
+        for (const key in decoders) {
+          if (decoders.hasOwnProperty(key)) {
+            const r = decoders[key].decode(json[key]);
+            if (r instanceof Ok) {
+              result[key] = r.value;
+            } else {
+              return err<a>(
+                $JsonDecoderErrors.objectError(decoderName, key, r.error)
+              );
+            }
+          }
+        }
+        return ok<a>(result);
+      } else {
+        return err<a>($JsonDecoderErrors.primitiveError(json, decoderName));
+      }
+    });
+  }
+
+  /**
    * Always succeeding decoder
    */
   export const succeed: Decoder<any> = new Decoder<any>((json: any) => {
@@ -207,6 +247,25 @@ export namespace JsonDecoder {
         return result;
       } else {
         return ok<a>(defaultValue);
+      }
+    });
+  }
+
+  /**
+   * Tries to decode with `decoder` and returns `error` on failure, but allows
+   * for `undefined` or `null` values to be present at the top level and returns
+   * an `undefined` if the value was `undefined` or `null`.
+   *
+   * @param decoder The actual decoder to use.
+   */
+  export function optional<a>(decoder: Decoder<a>): Decoder<a | undefined> {
+    return new Decoder<a | undefined>((json: any) => {
+      if (json === undefined) {
+        return ok<undefined>(undefined);
+      } else if (json === null) {
+        return ok<undefined>(undefined);
+      } else {
+        return decoder.decode(json);
       }
     });
   }
@@ -469,4 +528,10 @@ export namespace $JsonDecoderErrors {
     error: string
   ): string =>
     `<${decoderName}> decoder failed at key "${key}" (mapped from the JSON key "${jsonKey}") with error: ${error}`;
+
+  export const objectStrictUnknownKeyError = (
+    decoderName: string,
+    key: string
+  ): string =>
+    `Unknown key "${key}" found while processing strict <${decoderName}> decoder`;
 }
